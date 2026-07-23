@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MANSAM — Engineering Excellence Beneath the Surface</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Raleway:wght@300;400;500;600;700;800&family=Manrope:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --accent:#C76B29;
+    --accent-soft:#e8a468;
+    --mist: rgba(217,221,226,0.7);
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{ height:100%; background:#020D18; color:#fff; font-family:'Manrope',sans-serif; overflow-x:hidden; cursor:none; }
+  ::selection{ background:var(--accent); color:#020D18; }
+
+  .cursor-dot,.cursor-ring{ position:fixed; top:0; left:0; pointer-events:none; z-index:9999; border-radius:50%; transform:translate(-50%,-50%); mix-blend-mode:difference; }
+  .cursor-dot{ width:5px; height:5px; background:#fff; }
+  .cursor-ring{ width:32px; height:32px; border:1px solid rgba(255,255,255,.45); transition:width .25s, height .25s, border-color .25s; }
+  .cursor-ring.grow{ width:60px; height:60px; border-color:var(--accent); }
+  @media (max-width:900px){ .cursor-dot,.cursor-ring{display:none;} html,body{cursor:auto;} }
+
+  .scroll-track{ height:520vh; position:relative; }
+  .stage{ position:sticky; top:0; height:100vh; width:100%; overflow:hidden;
+    background:linear-gradient(180deg,#040f1c 0%,#0c2d47 26%,#1f4f60 46%,#3d6d68 58%,#a97a54 68%,#e3a468 76%,#f4c98f 84%,#e3a468 100%); }
+  #world-canvas{ position:absolute; inset:0; width:100%; height:100%; display:block; }
+
+  .grain{ position:fixed; inset:0; z-index:5; pointer-events:none; opacity:.04;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+  .vignette{ position:fixed; inset:0; z-index:4; pointer-events:none;
+    background:radial-gradient(ellipse at center, transparent 40%, rgba(2,13,24,.75) 100%); }
+
+  header{ position:fixed; top:0; left:0; right:0; z-index:30; display:flex; justify-content:space-between; align-items:center; padding:26px 44px; }
+  .logo{ font-family:'Raleway',sans-serif; font-weight:700; letter-spacing:.22em; font-size:14px; }
+  .logo span{ color:var(--accent); }
+  header nav a{ color:var(--mist); text-decoration:none; font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; margin-left:32px; }
+  @media (max-width:900px){ header nav{ display:none; } }
+
+  .depth-hud{ position:fixed; left:26px; top:50%; transform:translateY(-50%); z-index:30;
+    font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--mist); letter-spacing:.1em;
+    display:flex; align-items:center; gap:12px; }
+  .depth-hud .track{ width:1px; height:180px; background:linear-gradient(to bottom,transparent,rgba(255,255,255,.3),transparent); position:relative; }
+  .depth-hud .dot{ position:absolute; left:-3px; width:7px; height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 8px var(--accent); top:0; }
+  .depth-hud .txt{ writing-mode:vertical-rl; }
+  @media (max-width:900px){ .depth-hud{ display:none; } }
+
+  /* diegetic overlay text — no cards, no borders, just light */
+  .beat{ position:absolute; z-index:20; opacity:0; pointer-events:none; }
+  .beat.interactive{ pointer-events:auto; }
+
+  #arrival{ left:8%; top:38%; max-width:640px; }
+  #arrival .eyebrow{ font-family:'JetBrains Mono',monospace; font-size:11.5px; letter-spacing:.22em; color:var(--accent-soft); text-transform:uppercase; margin-bottom:20px; text-shadow:0 0 20px rgba(199,107,41,.5); }
+  #arrival h1{ font-family:'Raleway',sans-serif; font-weight:300; font-size:clamp(2.2rem,5.4vw,4.4rem); line-height:1.08; letter-spacing:-.01em;
+    text-shadow:0 0 40px rgba(120,180,210,.35), 0 2px 30px rgba(0,0,0,.6); }
+  #arrival h1 b{ font-weight:600; color:#fff; }
+  #arrival p{ margin-top:26px; max-width:38ch; font-weight:300; font-size:1rem; line-height:1.7; color:var(--mist); text-shadow:0 2px 20px rgba(0,0,0,.6); }
+  .ctas{ margin-top:38px; display:flex; gap:26px; align-items:center; }
+  .ctas a{ font-family:'Manrope',sans-serif; font-size:13px; letter-spacing:.05em; color:#fff; text-decoration:none; font-weight:500; display:flex; align-items:center; gap:10px; }
+  .ctas a.primary{ color:var(--accent-soft); }
+  .ctas a .arrow{ width:20px; height:1px; background:currentColor; position:relative; }
+  .ctas a .arrow::after{ content:''; position:absolute; right:0; top:-2.5px; width:5px; height:5px; border-top:1px solid currentColor; border-right:1px solid currentColor; transform:rotate(45deg); }
+
+  #descent-frag{ left:12%; top:52%; font-family:'JetBrains Mono',monospace; font-size:12px; letter-spacing:.15em; color:rgba(200,220,230,.55); text-transform:uppercase; }
+
+  #station-hud-left{ left:8%; top:30%; max-width:300px; }
+  #station-hud-left .eyebrow{ font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:.18em; color:var(--accent-soft); text-transform:uppercase; margin-bottom:16px; }
+  #station-hud-left h2{ font-family:'Raleway',sans-serif; font-weight:500; font-size:clamp(1.3rem,2.2vw,1.9rem); line-height:1.3; text-shadow:0 2px 24px rgba(0,0,0,.7); }
+
+  #station-hud-right{ right:6%; top:30%; text-align:right; max-width:280px; font-family:'JetBrains Mono',monospace; }
+  .stat-line{ display:flex; justify-content:flex-end; gap:10px; align-items:baseline; margin-bottom:14px; }
+  .stat-line .n{ font-family:'Raleway',sans-serif; font-size:1.5rem; font-weight:700; color:#fff; }
+  .stat-line .l{ font-size:10.5px; letter-spacing:.06em; color:var(--mist); text-transform:uppercase; max-width:16ch; text-align:right; }
+
+  #station-credo{ left:50%; bottom:9%; transform:translateX(-50%); text-align:center; max-width:560px; }
+  #station-credo p{ font-size:.92rem; line-height:1.7; color:var(--mist); font-weight:300; text-shadow:0 2px 20px rgba(0,0,0,.7); }
+  #station-credo b{ color:#fff; font-weight:500; }
+
+  .play-control{ position:absolute; left:50%; top:47.5%; transform:translate(-50%,-50%); z-index:22;
+    width:70px; height:70px; border-radius:50%; border:1px solid rgba(255,255,255,.5);
+    display:flex; align-items:center; justify-content:center; background:rgba(2,13,24,.25);
+    opacity:0; pointer-events:none; transition:transform .3s ease, background .3s ease; }
+  .play-control:hover{ transform:translate(-50%,-50%) scale(1.1); background:rgba(199,107,41,.25); border-color:var(--accent); }
+  .play-control svg{ width:17px; height:17px; fill:#fff; margin-left:2px; }
+
+  .scroll-hint{ position:absolute; left:8%; bottom:8%; z-index:20; font-family:'JetBrains Mono',monospace; font-size:10.5px; letter-spacing:.15em; color:var(--mist); display:flex; align-items:center; gap:12px; opacity:0; }
+  .scroll-hint .stem{ width:1px; height:38px; background:rgba(255,255,255,.3); position:relative; overflow:hidden; }
+  .scroll-hint .stem i{ position:absolute; top:-100%; left:0; width:100%; height:100%; background:var(--accent); animation:drip 2.2s ease-in-out infinite; }
+  @keyframes drip{ 0%{top:-100%;} 60%{top:100%;} 100%{top:100%;} }
+</style>
+</head>
+<body>
+
+<div class="cursor-dot"></div>
+<div class="cursor-ring"></div>
+<div class="grain"></div>
+<div class="vignette"></div>
+
+<header>
+  <div class="logo">MAN<span>SAM</span></div>
+  <nav><a href="#">Solutions</a><a href="#">Projects</a><a href="#">Equipment</a><a href="#">Contact</a></nav>
+</header>
+
+<div class="depth-hud">
+  <div class="track"><div class="dot" id="depthDot"></div></div>
+  <div class="txt"><b id="depthVal">000</b>&nbsp;M &middot; DESCENT</div>
+</div>
+
+<div class="scroll-track" id="scrollTrack">
+  <div class="stage">
+    <canvas id="world-canvas"></canvas>
+
+    <div class="beat interactive" id="arrival">
+      <div class="eyebrow">Specialist Subsea &amp; Offshore Engineering</div>
+      <h1>Engineering <b>Excellence</b><br/>Beneath the Surface.</h1>
+      <p>Delivering precision‑engineered offshore and subsea solutions for the world's most demanding marine infrastructure.</p>
+      <div class="ctas">
+        <a href="#" class="primary" data-magnet>Explore Our Engineering <span class="arrow"></span></a>
+        <a href="#" data-magnet>Watch Our Story <span class="arrow"></span></a>
+      </div>
+    </div>
+
+    <div class="beat" id="descent-frag">descending toward the work —</div>
+
+    <div class="beat" id="station-hud-left">
+      <div class="eyebrow">Engineering In Motion</div>
+      <h2>Proprietary equipment. In‑house expertise. Every metre engineered with intent.</h2>
+    </div>
+
+    <div class="beat" id="station-hud-right">
+      <div class="stat-line"><span class="n">250+</span><span class="l">Proprietary Engineering Assets</span></div>
+      <div class="stat-line"><span class="n">50+</span><span class="l">Permanent Specialists</span></div>
+      <div class="stat-line"><span class="n">2011</span><span class="l">Established</span></div>
+      <div class="stat-line"><span class="n" style="font-size:1rem">ISO 9001·14001·45001</span><span class="l">Certified</span></div>
+    </div>
+
+    <button class="play-control interactive" id="playCtrl" data-magnet aria-label="Play project reel">
+      <svg viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></svg>
+    </button>
+
+    <div class="beat" id="station-credo">
+      <p><b>MANSAM</b> partners with leading EPC contractors to solve complex subsea engineering challenges through specialist services, proprietary equipment, and in‑house engineering expertise.</p>
+    </div>
+
+    <div class="scroll-hint" id="scrollHint"><div class="stem"><i></i></div>DIVE IN</div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+<script>
+gsap.registerPlugin(ScrollTrigger);
+
+/* ---------------- custom cursor ---------------- */
+const dot=document.querySelector('.cursor-dot'), ring=document.querySelector('.cursor-ring');
+let mx=innerWidth/2,my=innerHeight/2, rx=mx, ry=my;
+window.addEventListener('mousemove', e=>{ mx=e.clientX; my=e.clientY; dot.style.left=mx+'px'; dot.style.top=my+'px'; });
+gsap.ticker.add(()=>{ rx+=(mx-rx)*.15; ry+=(my-ry)*.15; ring.style.left=rx+'px'; ring.style.top=ry+'px'; });
+document.querySelectorAll('[data-magnet]').forEach(el=>{
+  el.addEventListener('mouseenter',()=>ring.classList.add('grow'));
+  el.addEventListener('mouseleave',()=>{ ring.classList.remove('grow'); gsap.to(el,{x:0,y:0,duration:.4,ease:'power3.out'}); });
+  el.addEventListener('mousemove', e=>{
+    const r=el.getBoundingClientRect();
+    gsap.to(el,{ x:(e.clientX-(r.left+r.width/2))*0.2, y:(e.clientY-(r.top+r.height/2))*0.3, duration:.4, ease:'power3.out' });
+  });
+});
+
+/* ---------------- THREE.JS WORLD ---------------- */
+const canvas=document.getElementById('world-canvas');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.05;
+renderer.outputEncoding=THREE.sRGBEncoding;
+
+const scene=new THREE.Scene();
+const fog=new THREE.FogExp2(0x03101d,0.012);
+scene.fog=fog;
+
+const camera=new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 300);
+
+// Single physical dive path: mostly downward travel with a smaller forward component.
+// This creates a proper ROV-style descent rather than a drone flyover.
+const cameraPath = new THREE.CatmullRomCurve3([
+  new THREE.Vector3(0, 11, 26),
+  new THREE.Vector3(0, 8.1, 18),
+  new THREE.Vector3(0, 4.5, 9),
+  new THREE.Vector3(0, 1.2, 0),
+  new THREE.Vector3(0, -2.4, -14),
+  new THREE.Vector3(0, -6.8, -42),
+  new THREE.Vector3(0, -12.5, -86),
+  new THREE.Vector3(0, -18.8, -148)
+], false, 'catmullrom', 0.15);
+
+const colorPalette = {
+  oceanDepth: new THREE.Color('#041E36'),
+  engineeringPrecision: new THREE.Color('#0F4F6C'),
+  growthReliability: new THREE.Color('#C76B29'),
+  industrialStrength: new THREE.Color('#D9DDE2'),
+  white: new THREE.Color('#FFFFFF')
+};
+
+let scrollProgress = 0;
+const LOOK_AHEAD_STEP = 0.032;
+const videoRevealCurve = { value: 0 };
+
+// lights: warm golden-hour surface -> cool deep + orange accent on structure
+const hemi=new THREE.HemisphereLight(0xffe3bd,0x03101d,1.05);
+scene.add(hemi);
+const key=new THREE.PointLight(0xffd8b0,1.3,90);
+key.position.set(10,14,14);
+scene.add(key);
+const accentLight=new THREE.PointLight(0xC76B29,0,60);
+accentLight.position.set(0,2,-70);
+scene.add(accentLight);
+
+/* ---- Realistic ocean surface (Scene 1: Arrival) ---- */
+const sunDir=new THREE.Vector3(0.55,0.30,-0.55).normalize();
+const oceanUniforms={
+  uTime:{value:0},
+  uSunDir:{value:sunDir},
+  uCameraPos:{value:camera.position},
+  uDeepColor:{value:new THREE.Color(0x052232)},
+  uShallowColor:{value:new THREE.Color(0xdf9c5e)},
+  uSunColor:{value:new THREE.Color(0xffb066)},
+  uOpacity:{value:1}
+};
+const oceanGeo=new THREE.PlaneGeometry(700,700,110,110);
+oceanGeo.rotateX(-Math.PI/2);
+const oceanMat=new THREE.ShaderMaterial({
+  uniforms:oceanUniforms,
+  transparent:true,
+  vertexShader:`
+    uniform float uTime;
+    varying vec3 vNormal;
+    varying vec3 vWorldPos;
+    varying float vElevation;
+
+    float waveHeight(vec2 p, float t){
+      float e = 0.0;
+      e += 0.55 * sin(dot(p, normalize(vec2(1.0,0.3))) * 0.07 + t*1.1);
+      e += 0.28 * sin(dot(p, normalize(vec2(-0.6,1.0))) * 0.14 + t*1.7);
+      e += 0.13 * sin(dot(p, normalize(vec2(0.4,-0.8))) * 0.33 + t*2.5);
+      e += 0.05 * sin(dot(p, normalize(vec2(0.9,0.5))) * 0.62 + t*3.3);
+      return e;
+    }
+
+    void main(){
+      vec3 pos = position;
+      float e = waveHeight(pos.xz, uTime);
+      pos.y += e;
+
+      float eps = 0.8;
+      float hx = waveHeight(pos.xz + vec2(eps,0.0), uTime);
+      float hz = waveHeight(pos.xz + vec2(0.0,eps), uTime);
+      vec3 tangentX = normalize(vec3(eps, hx-e, 0.0));
+      vec3 tangentZ = normalize(vec3(0.0, hz-e, eps));
+      vNormal = normalize(cross(tangentZ, tangentX));
+      vElevation = e;
+
+      vec4 worldPos = modelMatrix * vec4(pos,1.0);
+      vWorldPos = worldPos.xyz;
+      gl_Position = projectionMatrix * viewMatrix * worldPos;
+    }
+  `,
+  fragmentShader:`
+    uniform vec3 uSunDir;
+    uniform vec3 uDeepColor;
+    uniform vec3 uShallowColor;
+    uniform vec3 uSunColor;
+    uniform vec3 uCameraPos;
+    uniform float uOpacity;
+    varying vec3 vNormal;
+    varying vec3 vWorldPos;
+    varying float vElevation;
+
+    void main(){
+      vec3 viewDir = normalize(uCameraPos - vWorldPos);
+      vec3 n = normalize(vNormal);
+      float fresnel = pow(1.0 - clamp(dot(viewDir, n), 0.0, 1.0), 3.0);
+
+      vec3 reflectDir = reflect(-uSunDir, n);
+      float spec = pow(max(dot(reflectDir, viewDir), 0.0), 140.0);
+      float glint = pow(max(dot(reflectDir, viewDir), 0.0), 14.0) * 0.35;
+
+      vec3 base = mix(uDeepColor, uShallowColor, fresnel);
+      vec3 color = base + uSunColor * (spec*1.6 + glint);
+      color += vElevation * 0.05;
+
+      gl_FragColor = vec4(color, uOpacity);
+    }
+  `
+});
+const ocean=new THREE.Mesh(oceanGeo, oceanMat);
+scene.add(ocean);
+
+// sun glow sprite on the horizon, in the sun's reflection path
+function sunTexture(){
+  const c=document.createElement('canvas'); c.width=c.height=256;
+  const ctx=c.getContext('2d');
+  const g=ctx.createRadialGradient(128,128,0,128,128,128);
+  g.addColorStop(0,'rgba(255,238,214,0.95)'); g.addColorStop(0.25,'rgba(255,190,110,0.55)');
+  g.addColorStop(0.6,'rgba(230,140,70,0.15)'); g.addColorStop(1,'rgba(230,140,70,0)');
+  ctx.fillStyle=g; ctx.fillRect(0,0,256,256); return new THREE.CanvasTexture(c);
+}
+const sunSprite=new THREE.Sprite(new THREE.SpriteMaterial({map:sunTexture(),transparent:true,blending:THREE.AdditiveBlending,depthWrite:false}));
+sunSprite.scale.set(60,60,1);
+sunSprite.position.set(sunDir.x*180, sunDir.y*180+3, sunDir.z*180);
+scene.add(sunSprite);
+
+function dotTexture(){
+  const c=document.createElement('canvas'); c.width=c.height=64;
+  const ctx=c.getContext('2d');
+  const g=ctx.createRadialGradient(32,32,0,32,32,32);
+  g.addColorStop(0,'rgba(255,255,255,.95)'); g.addColorStop(.4,'rgba(190,220,235,.5)'); g.addColorStop(1,'rgba(190,220,235,0)');
+  ctx.fillStyle=g; ctx.fillRect(0,0,64,64); return new THREE.CanvasTexture(c);
+}
+const dTex=dotTexture();
+
+// two particle depths for parallax
+function makeField(count,spread,zRange,size,opacity,color){
+  const pos=new Float32Array(count*3), spd=new Float32Array(count);
+  for(let i=0;i<count;i++){
+    pos[i*3]=(Math.random()-.5)*spread;
+    pos[i*3+1]=(Math.random()-.5)*40-4;
+    pos[i*3+2]=(Math.random()*zRange)-zRange*0.8;
+    spd[i]=0.1+Math.random()*.3;
+  }
+  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  const m=new THREE.PointsMaterial({size,map:dTex,transparent:true,depthWrite:false,color,opacity,blending:THREE.AdditiveBlending});
+  const pts=new THREE.Points(g,m);
+  scene.add(pts);
+  return {pts,g,spd,count};
+}
+const nearField=makeField(1200,50,120,0.26,0.6,0xcfe7ef);
+const farField=makeField(500,90,160,0.55,0.35,0x2f7c9c);
+const nearFieldBaseOpacity=nearField.pts.material.opacity, farFieldBaseOpacity=farField.pts.material.opacity;
+nearField.pts.material.opacity=0; farField.pts.material.opacity=0;
+
+// light shafts near surface
+function shaftTex(){
+  const c=document.createElement('canvas'); c.width=100;c.height=460;
+  const ctx=c.getContext('2d'); const g=ctx.createLinearGradient(0,0,0,460);
+  g.addColorStop(0,'rgba(255,225,180,.5)'); g.addColorStop(.6,'rgba(180,150,120,.1)'); g.addColorStop(1,'rgba(180,150,120,0)');
+  ctx.fillStyle=g; ctx.fillRect(0,0,100,460); return new THREE.CanvasTexture(c);
+}
+const shaftGroup=new THREE.Group();
+const sTex=shaftTex();
+for(let i=0;i<5;i++){
+  const mesh=new THREE.Mesh(new THREE.PlaneGeometry(5,36), new THREE.MeshBasicMaterial({map:sTex,transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}));
+  mesh.position.set((i-2)*8,10,-4-i*4);
+  mesh.rotation.x=-0.2; mesh.rotation.z=(Math.random()-.5)*0.25;
+  mesh.material.opacity=0;
+  shaftGroup.add(mesh);
+}
+scene.add(shaftGroup);
+const shaftFade={v:0};
+
+// drifting debris (engineering fragments) through the descent
+const debris=new THREE.Group();
+const debrisGeo=new THREE.IcosahedronGeometry(0.6,0);
+for(let i=0;i<10;i++){
+  const mat=new THREE.MeshStandardMaterial({color:0x264a5c,metalness:0.6,roughness:0.4,transparent:true,opacity:0});
+  const m=new THREE.Mesh(debrisGeo,mat);
+  m.position.set((Math.random()-.5)*30,(Math.random()-.5)*30-8,-30-Math.random()*60);
+  m.scale.setScalar(0.4+Math.random()*0.8);
+  m.userData.spin=(Math.random()-.5)*0.4;
+  debris.add(m);
+}
+scene.add(debris);
+const debrisFade={v:0};
+
+// Discoverable underwater media: a faint rectangular silhouette that resolves into a thumbnail
+// as the camera moves deeper into the water volume.
+const discoveryCanvas=document.createElement('canvas');
+discoveryCanvas.width=1200;
+discoveryCanvas.height=700;
+const discoveryCtx=discoveryCanvas.getContext('2d');
+const discoveryTexture=new THREE.CanvasTexture(discoveryCanvas);
+const discoveryPlane=new THREE.Mesh(
+  new THREE.PlaneGeometry(13.5, 7.8),
+  new THREE.MeshBasicMaterial({
+    map: discoveryTexture,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    side: THREE.DoubleSide
+  })
+);
+discoveryPlane.position.set(0, -2.4, -64);
+scene.add(discoveryPlane);
+
+function paintDiscovery(t){
+  const w=discoveryCanvas.width,h=discoveryCanvas.height;
+  const gradient=discoveryCtx.createLinearGradient(0,0,w,h);
+  gradient.addColorStop(0,'#041E36');
+  gradient.addColorStop(0.5,'#0F4F6C');
+  gradient.addColorStop(1,'#08263a');
+  discoveryCtx.fillStyle=gradient;
+  discoveryCtx.fillRect(0,0,w,h);
+
+  discoveryCtx.fillStyle='rgba(217,221,226,0.10)';
+  for(let i=0;i<70;i++){
+    const x=Math.random()*w;
+    const y=Math.random()*h;
+    const r=1+Math.random()*3;
+    discoveryCtx.beginPath();
+    discoveryCtx.arc(x,y,r,0,Math.PI*2);
+    discoveryCtx.fill();
+  }
+
+  discoveryCtx.strokeStyle='rgba(199,107,41,0.35)';
+  discoveryCtx.lineWidth=4;
+  discoveryCtx.beginPath();
+  discoveryCtx.moveTo(120,h*0.74);
+  discoveryCtx.lineTo(420+Math.sin(t*0.5)*28,h*0.74);
+  discoveryCtx.lineTo(530+Math.sin(t*0.5)*24,h*0.42);
+  discoveryCtx.lineTo(840+Math.sin(t*0.5)*20,h*0.42);
+  discoveryCtx.lineTo(910+Math.sin(t*0.5)*16,h*0.22);
+  discoveryCtx.lineTo(w-120,h*0.22);
+  discoveryCtx.stroke();
+
+  discoveryCtx.strokeStyle='rgba(217,221,226,0.18)';
+  discoveryCtx.lineWidth=1.8;
+  discoveryCtx.beginPath();
+  discoveryCtx.moveTo(140,h*0.25);
+  discoveryCtx.lineTo(360,h*0.25);
+  discoveryCtx.lineTo(430,h*0.52);
+  discoveryCtx.lineTo(760,h*0.52);
+  discoveryCtx.lineTo(830,h*0.78);
+  discoveryCtx.lineTo(w-130,h*0.78);
+  discoveryCtx.stroke();
+
+  discoveryCtx.fillStyle='rgba(255,255,255,0.92)';
+  discoveryCtx.font='700 62px Raleway, sans-serif';
+  discoveryCtx.fillText('MANSAM', 110, 150);
+  discoveryCtx.fillStyle='rgba(217,221,226,0.78)';
+  discoveryCtx.font='500 28px Manrope, sans-serif';
+  discoveryCtx.fillText('ENGINEERING EXCELLENCE', 112, 205);
+
+  discoveryTexture.needsUpdate=true;
+}
+
+function resize(){ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); }
+window.addEventListener('resize',resize);
+
+const playCtrl=document.getElementById('playCtrl');
+
+const clock=new THREE.Clock();
+function animate(){
+  const t=clock.getElapsedTime();
+  oceanUniforms.uTime.value=t;
+  oceanUniforms.uCameraPos.value.copy(camera.position);
+
+  [nearField,farField].forEach(f=>{
+    const p=f.g.attributes.position.array;
+    for(let i=0;i<f.count;i++){ p[i*3+1]+=f.spd[i]*0.012; if(p[i*3+1]>36) p[i*3+1]=-36; }
+    f.g.attributes.position.needsUpdate=true;
+  });
+
+  const depthProgress = THREE.MathUtils.clamp(scrollProgress * 1.15, 0, 1);
+  const surfaceZone = THREE.MathUtils.smoothstep(depthProgress, 0.0, 0.14);
+  const engineeringZone = THREE.MathUtils.smoothstep(depthProgress, 0.10, 0.42);
+  const deepZone = THREE.MathUtils.smoothstep(depthProgress, 0.38, 1.0);
+
+  const surfaceColor = new THREE.Color('#9fb8c9');
+  const engineeringColor = new THREE.Color('#0F4F6C');
+  const deepColor = new THREE.Color('#041E36');
+  const fogSurface = new THREE.Color('#b9c8d3');
+  const fogEngineering = new THREE.Color('#0F4F6C');
+  const fogDeep = new THREE.Color('#041E36');
+  const nearParticleSurface = new THREE.Color('#d9e7f0');
+  const nearParticleEngineering = new THREE.Color('#9fb7c8');
+  const nearParticleDeep = new THREE.Color('#132b3f');
+  const farParticleSurface = new THREE.Color('#7e9bb2');
+  const farParticleEngineering = new THREE.Color('#496f87');
+  const farParticleDeep = new THREE.Color('#0a1b2a');
+
+  const blendedSurface = surfaceColor.clone().lerp(engineeringColor, engineeringZone * 0.42);
+  const blendedMid = engineeringColor.clone().lerp(deepColor, deepZone * 0.68);
+  const blendedDeep = deepColor.clone().lerp(engineeringColor, 0.18);
+  const fogColor = fogSurface.clone().lerp(fogEngineering, engineeringZone * 0.72).lerp(fogDeep, deepZone * 0.8);
+
+  oceanUniforms.uShallowColor.value.copy(blendedSurface);
+  oceanUniforms.uDeepColor.value.copy(blendedDeep);
+  oceanUniforms.uSunColor.value.copy(new THREE.Color('#f6c48f').lerp(new THREE.Color('#D9DDE2'), engineeringZone * 0.52).lerp(new THREE.Color('#0F4F6C'), deepZone * 0.38));
+
+  oceanUniforms.uOpacity.value = 0.92 - surfaceZone * 0.13 + deepZone * 0.03;
+  sunSprite.material.opacity = Math.max(0, 0.82 - depthProgress * 0.62);
+
+  const nearParticleColor = nearParticleSurface.clone().lerp(nearParticleEngineering, engineeringZone * 0.85).lerp(nearParticleDeep, deepZone * 0.92);
+  const farParticleColor = farParticleSurface.clone().lerp(farParticleEngineering, engineeringZone * 0.65).lerp(farParticleDeep, deepZone * 0.9);
+  nearField.pts.material.color.copy(nearParticleColor);
+  farField.pts.material.color.copy(farParticleColor);
+  nearField.pts.material.opacity = nearFieldBaseOpacity * (0.18 + engineeringZone * 0.42 + deepZone * 0.18);
+  farField.pts.material.opacity = farFieldBaseOpacity * (0.12 + deepZone * 0.42);
+  nearField.pts.material.size = 0.26 + engineeringZone * 0.06 - deepZone * 0.04;
+  farField.pts.material.size = 0.55 + deepZone * 0.12;
+
+  shaftGroup.children.forEach((m, index)=>{
+    const shaftDepth = THREE.MathUtils.clamp(index / Math.max(shaftGroup.children.length - 1, 1), 0, 1);
+    m.material.opacity = (0.08 + engineeringZone * 0.32 + deepZone * 0.25) * (1 - shaftDepth * 0.28);
+  });
+  debris.children.forEach(d=>{ d.rotation.x+=d.userData.spin*0.01; d.rotation.y+=d.userData.spin*0.008; d.material.opacity=debrisFade.v*0.5; });
+
+  // Discovery is driven by camera distance to the underwater thumbnail volume.
+  const thumbnailDistance = camera.position.distanceTo(discoveryPlane.position);
+  const thumbnailReveal = 1 - THREE.MathUtils.clamp((thumbnailDistance - 18) / 86, 0, 1);
+  discoveryPlane.material.opacity = Math.max(0, thumbnailReveal * 0.95);
+  videoRevealCurve.value = thumbnailReveal;
+
+  const playOpacity = Math.max(0, Math.min(1, thumbnailReveal * 1.1));
+  playCtrl.style.opacity = playOpacity.toFixed(3);
+  playCtrl.style.pointerEvents = playOpacity > 0.2 ? 'auto' : 'none';
+
+  // The camera follows a single spline-based dive path.
+  const curvePoint = cameraPath.getPointAt(scrollProgress);
+  const curveLookTarget = cameraPath.getPointAt(Math.min(scrollProgress + LOOK_AHEAD_STEP, 1));
+
+  camera.position.copy(curvePoint);
+  camera.lookAt(curveLookTarget);
+
+  fog.color.copy(fogColor);
+  fog.density = 0.012 + engineeringZone * 0.028 + deepZone * 0.06;
+  hemi.color.copy(new THREE.Color('#ffe6c5').lerp(new THREE.Color('#c8d8e6'), engineeringZone * 0.6).lerp(new THREE.Color('#0F4F6C'), deepZone * 0.72));
+  hemi.intensity = 1.05 - engineeringZone * 0.22 - deepZone * 0.58;
+  key.color.copy(new THREE.Color('#ffd8a8').lerp(new THREE.Color('#b8d2e1'), engineeringZone * 0.65).lerp(new THREE.Color('#0F4F6C'), deepZone * 0.5));
+  key.intensity = 1.3 - engineeringZone * 0.34 - deepZone * 0.72;
+  accentLight.color.copy(new THREE.Color('#C76B29').lerp(new THREE.Color('#D9DDE2'), deepZone * 0.4));
+  accentLight.intensity = 0.18 + deepZone * 0.7;
+  shaftFade.v = 0.14 + engineeringZone * 0.25 + deepZone * 0.42;
+  debrisFade.v = deepZone * 0.85;
+
+  paintDiscovery(t);
+  renderer.render(scene,camera);
+  requestAnimationFrame(animate);
+}
+animate();
+
+/* ---------------- SCROLL-DRIVEN CAMERA JOURNEY (one continuous spline path) ---------------- */
+const journey = gsap.timeline({
+  scrollTrigger:{ trigger:'#scrollTrack', start:'top top', end:'bottom bottom', scrub:0.7,
+    onUpdate:self=>{
+      scrollProgress = self.progress;
+      const m=Math.round(self.progress*380);
+      document.getElementById('depthVal').textContent=String(m).padStart(3,'0');
+      document.getElementById('depthDot').style.top=(self.progress*100)+'%';
+    }
+  }
+});
+
+// The timeline now only updates the scroll-driven interpolation value.
+// The camera itself is driven by a single CatmullRomCurve3 path in animate().
+
+const videoOverlay=document.createElement('div');
+videoOverlay.style.position='fixed';
+videoOverlay.style.inset='0';
+videoOverlay.style.zIndex='100';
+videoOverlay.style.display='flex';
+videoOverlay.style.alignItems='center';
+videoOverlay.style.justifyContent='center';
+videoOverlay.style.background='rgba(2,13,24,0.55)';
+videoOverlay.style.opacity='0';
+videoOverlay.style.pointerEvents='none';
+videoOverlay.style.transition='opacity 0.45s ease';
+videoOverlay.style.backdropFilter='blur(8px)';
+
+const videoElement=document.createElement('video');
+videoElement.src='https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4';
+videoElement.playsInline=true;
+videoElement.controls=true;
+videoElement.style.width='100vw';
+videoElement.style.height='100vh';
+videoElement.style.objectFit='cover';
+videoElement.style.opacity='0';
+videoElement.style.transition='opacity 0.45s ease';
+videoOverlay.appendChild(videoElement);
+document.body.appendChild(videoOverlay);
+
+function openVideo(){
+  videoOverlay.style.opacity='1';
+  videoOverlay.style.pointerEvents='auto';
+  videoElement.style.opacity='1';
+  videoElement.play().catch(()=>{});
+}
+
+function closeVideo(){
+  videoOverlay.style.opacity='0';
+  videoOverlay.style.pointerEvents='none';
+  videoElement.style.opacity='0';
+  videoElement.pause();
+}
+
+playCtrl.addEventListener('click', openVideo);
+videoOverlay.addEventListener('click', (e)=>{
+  if (e.target === videoOverlay) closeVideo();
+});
+document.addEventListener('keydown', (event)=>{
+  if (event.key === 'Escape') closeVideo();
+});
+
+/* ---------------- diegetic text beats (opacity tied to same journey) ---------------- */
+gsap.set('#arrival',{opacity:1});
+gsap.set('#scrollHint',{opacity:1});
+
+ScrollTrigger.create({ trigger:'#scrollTrack', start:'top top', end:'18% top', scrub:true,
+  onUpdate:self=>{ document.getElementById('scrollHint').style.opacity=1-self.progress; } });
+
+ScrollTrigger.create({ trigger:'#scrollTrack', start:'6% top', end:'26% top', scrub:true,
+  onUpdate:self=>{ document.getElementById('arrival').style.opacity=1-self.progress;
+    document.getElementById('arrival').style.transform=`translateY(${-self.progress*60}px)`; } });
+
+ScrollTrigger.create({ trigger:'#scrollTrack', start:'24% top', end:'34% top', scrub:true,
+  onUpdate:self=>{ const v=self.progress<0.5? self.progress*2 : (1-self.progress)*2;
+    document.getElementById('descent-frag').style.opacity=Math.max(0,v)*0.7; } });
+
+['#station-hud-left','#station-hud-right','#station-credo'].forEach(sel=>{
+  ScrollTrigger.create({ trigger:'#scrollTrack', start:'62% top', end:'78% top', scrub:true,
+    onUpdate:self=>{ document.querySelector(sel).style.opacity=self.progress; } });
+});
+</script>
+</body>
+</html>
