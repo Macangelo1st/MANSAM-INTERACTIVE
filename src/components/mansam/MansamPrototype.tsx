@@ -3,6 +3,7 @@ import { gsap } from 'gsap'
 import { ScrollTrigger } from 'gsap/ScrollTrigger'
 import { MachineSection } from './MachineSection'
 import { Scene } from './Scene'
+import type { HotspotDefinition } from './hotspot-config'
 
 gsap.registerPlugin(ScrollTrigger)
 
@@ -10,7 +11,7 @@ export function MansamPrototype() {
   const [progress, setProgress] = useState(0)
   const [playVisible, setPlayVisible] = useState(false)
   const [isVideoOpen, setIsVideoOpen] = useState(false)
-  const [machineVisible, setMachineVisible] = useState(false)
+  const [activeHotspot, setActiveHotspot] = useState<HotspotDefinition | null>(null)
   const playRef = useRef<HTMLButtonElement | null>(null)
   const videoRef = useRef<HTMLDivElement | null>(null)
   const depthDotRef = useRef<HTMLDivElement | null>(null)
@@ -21,13 +22,11 @@ export function MansamPrototype() {
   useEffect(() => {
     const dot = cursorDotRef.current
     const ring = cursorRingRef.current
-
     const handleMouseMove = (event: MouseEvent) => {
       if (!dot || !ring) return
       dot.style.left = `${event.clientX}px`
       dot.style.top = `${event.clientY}px`
     }
-
     window.addEventListener('mousemove', handleMouseMove)
     const tick = () => {
       if (!dot || !ring) return
@@ -36,9 +35,7 @@ export function MansamPrototype() {
       ring.style.left = `${currentX + (dot.style.left ? parseFloat(dot.style.left) - currentX : 0) * 0.15}px`
       ring.style.top = `${currentY + (dot.style.top ? parseFloat(dot.style.top) - currentY : 0) * 0.15}px`
     }
-
     gsap.ticker.add(tick)
-
     return () => {
       window.removeEventListener('mousemove', handleMouseMove)
       gsap.ticker.remove(tick)
@@ -58,60 +55,34 @@ export function MansamPrototype() {
         onUpdate: (self) => {
           const value = self.progress
           setProgress(value)
-          const depth = Math.round(value * 380)
+          const depth = Math.round(value * 560)
           if (depthValueRef.current) depthValueRef.current.textContent = String(depth).padStart(3, '0')
           if (depthDotRef.current) depthDotRef.current.style.top = `${value * 100}%`
-        },
-      })
 
-      ScrollTrigger.create({
-        trigger: '#scrollTrack',
-        start: 'top top',
-        end: '18% top',
-        scrub: true,
-        onUpdate: (self) => {
-          const el = document.getElementById('scrollHint')
-          if (el) el.style.opacity = String(1 - self.progress)
-        },
-      })
-
-      ScrollTrigger.create({
-        trigger: '#scrollTrack',
-        start: '6% top',
-        end: '26% top',
-        scrub: true,
-        onUpdate: (self) => {
-          const el = document.getElementById('arrival')
-          if (el) {
-            el.style.opacity = String(1 - self.progress)
-            el.style.transform = `translateY(${-self.progress * 60}px)`
+          const fadeWindow = (start: number, end: number, fadeOutStart: number, fadeOutEnd: number) => {
+            const fadeIn = gsap.utils.clamp(0, 1, (value - start) / (end - start))
+            const fadeOut = 1 - gsap.utils.clamp(0, 1, (value - fadeOutStart) / (fadeOutEnd - fadeOutStart))
+            return fadeIn * fadeOut
           }
-        },
-      })
+          const setBeat = (selector: string, opacity: number, y = 0) => {
+            const element = document.querySelector(selector)
+            if (element instanceof HTMLElement) {
+              element.style.opacity = String(opacity)
+              element.style.transform = `translateY(${y}px)`
+            }
+          }
 
-      ScrollTrigger.create({
-        trigger: '#scrollTrack',
-        start: '24% top',
-        end: '34% top',
-        scrub: true,
-        onUpdate: (self) => {
-          const v = self.progress < 0.5 ? self.progress * 2 : (1 - self.progress) * 2
-          const el = document.getElementById('descent-frag')
-          if (el) el.style.opacity = String(Math.max(0, v) * 0.7)
-        },
-      })
+          setBeat('#scrollHint', 1 - gsap.utils.clamp(0, 1, value / 0.12))
+          const hero = fadeWindow(0, 0.02, 0.10, 0.16)
+          setBeat('#arrival', hero, -gsap.utils.interpolate(0, 42, 1 - hero))
+          setBeat('#descent-frag', fadeWindow(0.14, 0.18, 0.24, 0.29) * 0.7)
 
-      ;['#station-hud-left', '#station-hud-right', '#station-credo'].forEach((sel) => {
-        ScrollTrigger.create({
-          trigger: '#scrollTrack',
-          start: '62% top',
-          end: '78% top',
-          scrub: true,
-          onUpdate: (self) => {
-            const el = document.querySelector(sel)
-            if (el instanceof HTMLElement) el.style.opacity = String(self.progress)
-          },
-        })
+          const video = fadeWindow(0.31, 0.35, 0.49, 0.55)
+          setBeat('#station-hud-left', video)
+          setBeat('#station-hud-right', video)
+          setBeat('#station-credo', video)
+          setPlayVisible(video > 0.35)
+        },
       })
     })
 
@@ -126,32 +97,32 @@ export function MansamPrototype() {
       ring?.classList.remove('grow')
       gsap.to('[data-magnet]', { x: 0, y: 0, duration: 0.4, ease: 'power3.out' })
     }
+    const handleMove = (event: Event) => {
+      const mouseEvent = event as MouseEvent
+      const target = mouseEvent.currentTarget as HTMLElement
+      const rect = target.getBoundingClientRect()
+      gsap.to(target, {
+        x: (mouseEvent.clientX - (rect.left + rect.width / 2)) * 0.2,
+        y: (mouseEvent.clientY - (rect.top + rect.height / 2)) * 0.3,
+        duration: 0.4,
+        ease: 'power3.out',
+      })
+    }
 
     dots.forEach((el) => {
       el.addEventListener('mouseenter', handleEnter)
       el.addEventListener('mouseleave', handleLeave)
-      el.addEventListener('mousemove', (event: MouseEvent) => {
-        const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-        gsap.to(event.currentTarget, {
-          x: (event.clientX - (rect.left + rect.width / 2)) * 0.2,
-          y: (event.clientY - (rect.top + rect.height / 2)) * 0.3,
-          duration: 0.4,
-          ease: 'power3.out',
-        })
-      })
+      el.addEventListener('mousemove', handleMove)
     })
 
     return () => {
       dots.forEach((el) => {
         el.removeEventListener('mouseenter', handleEnter)
         el.removeEventListener('mouseleave', handleLeave)
+        el.removeEventListener('mousemove', handleMove)
       })
     }
   }, [])
-
-  useEffect(() => {
-    setMachineVisible(progress > 0.78)
-  }, [progress])
 
   useEffect(() => {
     if (!playRef.current) return
@@ -191,30 +162,30 @@ export function MansamPrototype() {
 
       <div className="scroll-track" id="scrollTrack">
         <div className="stage">
-          <Scene progress={progress} onPlayVisibilityChange={setPlayVisible} />
+          <Scene progress={progress} onPlayVisibilityChange={setPlayVisible} onHotspotChange={setActiveHotspot} />
 
           <div className="beat interactive" id="arrival">
             <div className="eyebrow">Specialist Subsea &amp; Offshore Engineering</div>
-            <h1>Engineering <b>Excellence</b><br />Beneath the Surface.</h1>
-            <p>Delivering precision‑engineered offshore and subsea solutions for the world's most demanding marine infrastructure.</p>
+            <h1>Engineering the Solutions<br /><b>Others Can&apos;t</b></h1>
+            <p>MANSAM partners with leading EPC contractors to solve complex subsea engineering challenges through specialist services, proprietary equipment, and in-house engineering expertise.</p>
             <div className="ctas">
-              <a href="#" className="primary" data-magnet>Explore Our Engineering <span className="arrow" /></a>
-              <a href="#" data-magnet>Watch Our Story <span className="arrow" /></a>
+              <a href="#" className="primary" data-magnet>Talk to an Expert <span className="arrow" /></a>
+              <a href="#" data-magnet>View Our Projects <span className="arrow" /></a>
             </div>
           </div>
 
           <div className="beat" id="descent-frag">descending toward the work —</div>
 
           <div className="beat" id="station-hud-left">
-            <div className="eyebrow">Engineering In Motion</div>
-            <h2>Proprietary equipment. In‑house expertise. Every metre engineered with intent.</h2>
+            <h2>Trusted by leading offshore contractors across Oil &amp; Gas, Offshore Wind and Marine Infrastructure.</h2>
           </div>
 
           <div className="beat" id="station-hud-right">
-            <div className="stat-line"><span className="n">250+</span><span className="l">Proprietary Engineering Assets</span></div>
-            <div className="stat-line"><span className="n">50+</span><span className="l">Permanent Specialists</span></div>
+            <div className="stat-line"><span className="n">250+</span><span className="l">Proprietary Engineering Assets*</span></div>
+            <div className="stat-line"><span className="n">50+</span><span className="l">Permanent Specialists*</span></div>
+            <div className="stat-line"><span className="n stat-line__wide">Global Projects</span><span className="l">Across Multiple Continents</span></div>
             <div className="stat-line"><span className="n">2011</span><span className="l">Established</span></div>
-            <div className="stat-line"><span className="n" style={{ fontSize: '1rem' }}>ISO 9001·14001·45001</span><span className="l">Certified</span></div>
+            <div className="stat-line"><span className="n stat-line__wide">ISO 9001 • ISO 14001 • ISO 45001</span><span className="l">Certified</span></div>
           </div>
 
           <button
@@ -233,7 +204,7 @@ export function MansamPrototype() {
           </div>
 
           <div className="scroll-hint" id="scrollHint"><div className="stem"><i /></div>DIVE IN</div>
-          <MachineSection visible={machineVisible} />
+          <MachineSection hotspot={activeHotspot} />
         </div>
       </div>
 

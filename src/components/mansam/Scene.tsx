@@ -1,27 +1,78 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
-import { CAMERA_PATH, LOOK_AHEAD_STEP, MACHINE_POSITION, MACHINE_SCALE } from './constants'
+import { gsap } from 'gsap'
+import { CAMERA_PATH, LOOK_AHEAD_STEP, MACHINE_POSITION } from './constants'
 import type { WorldSceneProps } from './types'
-import type { HotspotDefinition } from './hotspot-config'
+import { HOTSPOT_CONFIG, type HotspotDefinition } from './hotspot-config'
+import { createBubbleField, createParticleField, disposeParticleField, updateParticleField } from './systems/ParticleSystem'
+import { getJourneyCameraProgress, updateCamera } from './systems/CameraSystem'
+import originalMachineImage from '../../assets/machine-original.jpg'
+import xrayMachineImage from '../../assets/machine-xray.jpg'
 
-type MachineState = {
-  activeHotspot: HotspotDefinition | null
-  mouseX: number
-  mouseY: number
+function disposeMaterial(material: THREE.Material | THREE.Material[]) {
+  if (Array.isArray(material)) {
+    material.forEach((entry) => entry.dispose())
+    return
+  }
+  material.dispose()
 }
 
-function dotTexture() {
-  const canvas = document.createElement('canvas')
-  canvas.width = canvas.height = 64
-  const ctx = canvas.getContext('2d')
-  const gradient = ctx!.createRadialGradient(32, 32, 0, 32, 32, 32)
-  gradient.addColorStop(0, 'rgba(255,255,255,.95)')
-  gradient.addColorStop(0.4, 'rgba(190,220,235,.5)')
-  gradient.addColorStop(1, 'rgba(190,220,235,0)')
-  ctx!.fillStyle = gradient
-  ctx!.fillRect(0, 0, 64, 64)
-  return new THREE.CanvasTexture(canvas)
-}
+const machineVertexShader = `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`
+
+const machineFragmentShader = `
+  uniform sampler2D uOriginal;
+  uniform sampler2D uXray;
+  uniform vec2 uHotspotCenter;
+  uniform vec2 uHotspotSize;
+  uniform float uReveal;
+  uniform float uInspection;
+  varying vec2 vUv;
+  void main() {
+    vec4 original = texture2D(uOriginal, vUv);
+    vec4 xray = texture2D(uXray, vUv);
+    vec2 distanceFromCenter = abs(vUv - uHotspotCenter);
+    float mask = 1.0 - smoothstep(0.72, 1.0, max(distanceFromCenter.x / uHotspotSize.x, distanceFromCenter.y / uHotspotSize.y));
+    float reveal = uReveal * uInspection * mask;
+    vec3 inspection = mix(original.rgb, xray.rgb, 0.92);
+    inspection += vec3(0.02, 0.12, 0.16) * mask;
+    gl_FragColor = vec4(mix(original.rgb, inspection, reveal), original.a * uReveal);
+  }
+`
+
+const seabedVertexShader = `
+  uniform float uTime;
+  varying vec2 vUv;
+  varying float vHeight;
+  void main() {
+    vUv = uv;
+    vec3 displaced = position;
+    float wave = sin(position.x * 0.11 + uTime * 0.035) * 0.35 + sin(position.y * 0.08 - uTime * 0.025) * 0.24;
+    displaced.z += wave;
+    vHeight = wave;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(displaced, 1.0);
+  }
+`
+
+const seabedFragmentShader = `
+  uniform float uTime;
+  uniform vec3 uColor;
+  varying vec2 vUv;
+  varying float vHeight;
+  void main() {
+    float grain = sin(vUv.x * 180.0) * sin(vUv.y * 140.0) * 0.035;
+    float caustic = sin(vUv.x * 38.0 + uTime * 0.12) * sin(vUv.y * 26.0 - uTime * 0.09);
+    caustic = smoothstep(0.72, 0.96, caustic) * 0.035;
+    float edgeFade = smoothstep(0.0, 0.18, min(min(vUv.x, 1.0 - vUv.x), min(vUv.y, 1.0 - vUv.y)));
+    vec3 color = uColor + vec3(grain + vHeight * 0.025 + caustic);
+    gl_FragColor = vec4(color, edgeFade);
+  }
+`
 
 function sunTexture() {
   const canvas = document.createElement('canvas')
@@ -51,38 +102,19 @@ function shaftTexture() {
   return new THREE.CanvasTexture(canvas)
 }
 
-function createField(count: number, spread: number, zRange: number, size: number, opacity: number, color: number) {
-  const pos = new Float32Array(count * 3)
-  const spd = new Float32Array(count)
-  for (let i = 0; i < count; i += 1) {
-    pos[i * 3] = (Math.random() - 0.5) * spread
-    pos[i * 3 + 1] = (Math.random() - 0.5) * 40 - 4
-    pos[i * 3 + 2] = (Math.random() * zRange) - zRange * 0.8
-    spd[i] = 0.1 + Math.random() * 0.3
-  }
-  const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3))
-  const material = new THREE.PointsMaterial({
-    size,
-    map: dotTexture(),
-    transparent: true,
-    depthWrite: false,
-    color,
-    opacity,
-    blending: THREE.AdditiveBlending,
-  })
-  const points = new THREE.Points(geometry, material)
-  return { points, geometry, spd, count }
-}
-
-export function Scene({ progress, onPlayVisibilityChange }: WorldSceneProps) {
+export function Scene({ progress, onHotspotChange }: WorldSceneProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const progressRef = useRef(progress)
+
+  useEffect(() => {
+    progressRef.current = progress
+  }, [progress])
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
 
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true })
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false })
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
     renderer.setSize(window.innerWidth, window.innerHeight)
     renderer.toneMapping = THREE.ACESFilmicToneMapping
@@ -91,6 +123,8 @@ export function Scene({ progress, onPlayVisibilityChange }: WorldSceneProps) {
 
     const scene = new THREE.Scene()
     const fog = new THREE.FogExp2(0x03101d, 0.012)
+    const backgroundColor = new THREE.Color('#071b28')
+    scene.background = backgroundColor
     scene.fog = fog
 
     const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 300)
@@ -102,8 +136,8 @@ export function Scene({ progress, onPlayVisibilityChange }: WorldSceneProps) {
       uSunDir: { value: sunDir },
       uCameraPos: { value: camera.position },
       uDeepColor: { value: new THREE.Color(0x052232) },
-      uShallowColor: { value: new THREE.Color(0xdf9c5e) },
-      uSunColor: { value: new THREE.Color(0xffb066) },
+      uShallowColor: { value: new THREE.Color(0x6f9fac) },
+      uSunColor: { value: new THREE.Color(0xb9d8d8) },
       uOpacity: { value: 1 },
     }
 
@@ -180,20 +214,72 @@ export function Scene({ progress, onPlayVisibilityChange }: WorldSceneProps) {
     sunSprite.position.set(sunDir.x * 180, sunDir.y * 180 + 3, sunDir.z * 180)
     scene.add(sunSprite)
 
-    const nearField = createField(1200, 50, 120, 0.26, 0.6, 0xcfe7ef)
-    const farField = createField(500, 90, 160, 0.55, 0.35, 0x2f7c9c)
-    const nearFieldBaseOpacity = nearField.points.material.opacity
-    const farFieldBaseOpacity = farField.points.material.opacity
-    nearField.points.material.opacity = 0
-    farField.points.material.opacity = 0
+    const nearField = createParticleField(4200, 72, 560, 0.18, 0.42, 0xcfe7ef, 2)
+    const farField = createParticleField(2200, 120, 580, 0.42, 0.28, 0x4d8ca2, 3)
+    const bubbles = createBubbleField(700, 76, 560, 0.13, 0.22, 2)
+    const largerBubbles = createBubbleField(90, 72, 560, 0.28, 0.13, 3)
+    const seabedDust = createParticleField(850, 46, 72, 0.2, 0.24, 0xc5d6d1, 2)
+    seabedDust.points.position.set(0, -47, -500)
+    const nearFieldBaseOpacity = nearField.material.opacity
+    const farFieldBaseOpacity = farField.material.opacity
+    const bubbleBaseOpacity = bubbles.material.opacity
+    const largerBubbleBaseOpacity = largerBubbles.material.opacity
+    const seabedDustBaseOpacity = seabedDust.material.opacity
+    nearField.material.opacity = 0
+    farField.material.opacity = 0
     scene.add(nearField.points)
     scene.add(farField.points)
+    scene.add(bubbles.points)
+    scene.add(largerBubbles.points)
+    scene.add(seabedDust.points)
+
+    const seabed = new THREE.Mesh(
+      new THREE.PlaneGeometry(140, 140, 36, 36),
+      new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: { value: 0 },
+          uColor: { value: new THREE.Color('#12333a') },
+        },
+        vertexShader: seabedVertexShader,
+        fragmentShader: seabedFragmentShader,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }),
+    )
+    seabed.rotation.x = -Math.PI / 2
+    seabed.position.set(0, -53, -520)
+    scene.add(seabed)
+
+    const rockGeometry = new THREE.DodecahedronGeometry(0.7, 0)
+    const rockMaterial = new THREE.MeshStandardMaterial({
+      color: 0x28474a,
+      roughness: 0.94,
+      metalness: 0.02,
+      flatShading: true,
+      transparent: true,
+      opacity: 0.8,
+    })
+    const rocks = new THREE.InstancedMesh(rockGeometry, rockMaterial, 72)
+    const rockMatrix = new THREE.Matrix4()
+    const rockPosition = new THREE.Vector3()
+    const rockScale = new THREE.Vector3()
+    const rockRotation = new THREE.Euler()
+    for (let index = 0; index < rocks.count; index += 1) {
+      rockPosition.set((Math.random() - 0.5) * 70, -52.1 + Math.random() * 1.2, -520 + (Math.random() - 0.5) * 70)
+      rockScale.setScalar(0.3 + Math.random() * 1.6)
+      rockRotation.set(Math.random(), Math.random(), Math.random())
+      rockMatrix.compose(rockPosition, new THREE.Quaternion().setFromEuler(rockRotation), rockScale)
+      rocks.setMatrixAt(index, rockMatrix)
+    }
+    rocks.instanceMatrix.needsUpdate = true
+    scene.add(rocks)
 
     const shaftGroup = new THREE.Group()
     const shaftTex = shaftTexture()
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 12; i += 1) {
       const mesh = new THREE.Mesh(
-        new THREE.PlaneGeometry(5, 36),
+        new THREE.PlaneGeometry(6, 70),
         new THREE.MeshBasicMaterial({
           map: shaftTex,
           transparent: true,
@@ -202,7 +288,7 @@ export function Scene({ progress, onPlayVisibilityChange }: WorldSceneProps) {
           side: THREE.DoubleSide,
         }),
       )
-      mesh.position.set((i - 2) * 8, 10, -4 - i * 4)
+      mesh.position.set((i - 5.5) * 8, 8, -12 - i * 42)
       mesh.rotation.x = -0.2
       mesh.rotation.z = (Math.random() - 0.5) * 0.25
       mesh.material.opacity = 0
@@ -230,75 +316,91 @@ export function Scene({ progress, onPlayVisibilityChange }: WorldSceneProps) {
     scene.add(debris)
     const debrisFade = { v: 0 }
 
-    const discoveryCanvas = document.createElement('canvas')
-    discoveryCanvas.width = 1200
-    discoveryCanvas.height = 700
-    const discoveryCtx = discoveryCanvas.getContext('2d')
-    const discoveryTexture = new THREE.CanvasTexture(discoveryCanvas)
-    const discoveryPlane = new THREE.Mesh(
-      new THREE.PlaneGeometry(13.5, 7.8),
-      new THREE.MeshBasicMaterial({
-        map: discoveryTexture,
+    const textureLoader = new THREE.TextureLoader()
+    const originalTexture = textureLoader.load(originalMachineImage)
+    const xrayTexture = textureLoader.load(xrayMachineImage)
+    ;[originalTexture, xrayTexture].forEach((texture) => {
+      texture.colorSpace = THREE.SRGBColorSpace
+      texture.minFilter = THREE.LinearFilter
+      texture.magFilter = THREE.LinearFilter
+    })
+
+    const machineUniforms = {
+      uOriginal: { value: originalTexture },
+      uXray: { value: xrayTexture },
+      uHotspotCenter: { value: new THREE.Vector2(0.5, 0.5) },
+      uHotspotSize: { value: new THREE.Vector2(0.12, 0.12) },
+      uReveal: { value: 0 },
+      uInspection: { value: 0 },
+    }
+    const machine = new THREE.Mesh(
+      new THREE.PlaneGeometry(18, 12),
+      new THREE.ShaderMaterial({
+        uniforms: machineUniforms,
+        vertexShader: machineVertexShader,
+        fragmentShader: machineFragmentShader,
         transparent: true,
-        opacity: 0,
         depthWrite: false,
         side: THREE.DoubleSide,
       }),
     )
-    discoveryPlane.position.set(0, -2.4, -64)
-    scene.add(discoveryPlane)
+    machine.position.copy(MACHINE_POSITION)
+    scene.add(machine)
+    const leaderMaterial = new THREE.LineBasicMaterial({
+      color: 0x7df6ff,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    })
+    const leaderGeometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(),
+      new THREE.Vector3(),
+      new THREE.Vector3(),
+    ])
+    const leaderLine = new THREE.Line(leaderGeometry, leaderMaterial)
+    scene.add(leaderLine)
 
-    function paintDiscovery(time: number) {
-      const w = discoveryCanvas.width
-      const h = discoveryCanvas.height
-      const gradient = discoveryCtx!.createLinearGradient(0, 0, w, h)
-      gradient.addColorStop(0, '#041E36')
-      gradient.addColorStop(0.5, '#0F4F6C')
-      gradient.addColorStop(1, '#08263a')
-      discoveryCtx!.fillStyle = gradient
-      discoveryCtx!.fillRect(0, 0, w, h)
-
-      discoveryCtx!.fillStyle = 'rgba(217,221,226,0.10)'
-      for (let i = 0; i < 70; i += 1) {
-        const x = Math.random() * w
-        const y = Math.random() * h
-        const r = 1 + Math.random() * 3
-        discoveryCtx!.beginPath()
-        discoveryCtx!.arc(x, y, r, 0, Math.PI * 2)
-        discoveryCtx!.fill()
+    const machineRaycaster = new THREE.Raycaster()
+    const pointer = new THREE.Vector2()
+    let activeHotspot: HotspotDefinition | null = null
+    const setHotspot = (hotspot: HotspotDefinition | null) => {
+      if (activeHotspot?.id === hotspot?.id) return
+      activeHotspot = hotspot
+      gsap.to(machineUniforms.uInspection, { value: hotspot ? 1 : 0, duration: 0.35, ease: 'power2.out' })
+      if (hotspot) {
+        machineUniforms.uHotspotCenter.value.set(
+          (hotspot.position.left + hotspot.position.width / 2) / 100,
+          1 - (hotspot.position.top + hotspot.position.height / 2) / 100,
+        )
+        machineUniforms.uHotspotSize.value.set(hotspot.position.width / 100, hotspot.position.height / 100)
+        const toWorld = (x: number, y: number, z: number) => new THREE.Vector3((x / 100 - 0.5) * 18, (0.5 - y / 100) * 12, MACHINE_POSITION.z + z)
+        leaderGeometry.setFromPoints([
+          toWorld(hotspot.position.left + hotspot.position.width / 2, hotspot.position.top + hotspot.position.height / 2, 0.12),
+          toWorld(hotspot.callout.startX, hotspot.callout.startY, 0.2),
+          toWorld(hotspot.callout.endX, hotspot.callout.endY, 0.2),
+        ])
       }
-
-      discoveryCtx!.strokeStyle = 'rgba(199,107,41,0.35)'
-      discoveryCtx!.lineWidth = 4
-      discoveryCtx!.beginPath()
-      discoveryCtx!.moveTo(120, h * 0.74)
-      discoveryCtx!.lineTo(420 + Math.sin(time * 0.5) * 28, h * 0.74)
-      discoveryCtx!.lineTo(530 + Math.sin(time * 0.5) * 24, h * 0.42)
-      discoveryCtx!.lineTo(840 + Math.sin(time * 0.5) * 20, h * 0.42)
-      discoveryCtx!.lineTo(910 + Math.sin(time * 0.5) * 16, h * 0.22)
-      discoveryCtx!.lineTo(w - 120, h * 0.22)
-      discoveryCtx!.stroke()
-
-      discoveryCtx!.strokeStyle = 'rgba(217,221,226,0.18)'
-      discoveryCtx!.lineWidth = 1.8
-      discoveryCtx!.beginPath()
-      discoveryCtx!.moveTo(140, h * 0.25)
-      discoveryCtx!.lineTo(360, h * 0.25)
-      discoveryCtx!.lineTo(430, h * 0.52)
-      discoveryCtx!.lineTo(760, h * 0.52)
-      discoveryCtx!.lineTo(830, h * 0.78)
-      discoveryCtx!.lineTo(w - 130, h * 0.78)
-      discoveryCtx!.stroke()
-
-      discoveryCtx!.fillStyle = 'rgba(255,255,255,0.92)'
-      discoveryCtx!.font = '700 62px Raleway, sans-serif'
-      discoveryCtx!.fillText('MANSAM', 110, 150)
-      discoveryCtx!.fillStyle = 'rgba(217,221,226,0.78)'
-      discoveryCtx!.font = '500 28px Manrope, sans-serif'
-      discoveryCtx!.fillText('ENGINEERING EXCELLENCE', 112, 205)
-
-      discoveryTexture.needsUpdate = true
+      gsap.to(leaderMaterial, { opacity: hotspot ? 0.9 : 0, duration: 0.35, ease: 'power2.out' })
+      onHotspotChange?.(hotspot)
     }
+    const handlePointerMove = (event: PointerEvent) => {
+      pointer.x = (event.clientX / window.innerWidth) * 2 - 1
+      pointer.y = -(event.clientY / window.innerHeight) * 2 + 1
+      machineRaycaster.setFromCamera(pointer, camera)
+      const hit = machineRaycaster.intersectObject(machine)[0]
+      if (!hit?.uv || machineUniforms.uReveal.value < 0.5) {
+        setHotspot(null)
+        return
+      }
+      const uv = hit.uv
+      const hotspot = HOTSPOT_CONFIG.find((candidate) => {
+        const x = uv.x * 100
+        const y = (1 - uv.y) * 100
+        return x >= candidate.position.left && x <= candidate.position.left + candidate.position.width && y >= candidate.position.top && y <= candidate.position.top + candidate.position.height
+      }) ?? null
+      setHotspot(hotspot)
+    }
+    window.addEventListener('pointermove', handlePointerMove)
 
     function resize() {
       camera.aspect = window.innerWidth / window.innerHeight
@@ -313,69 +415,94 @@ export function Scene({ progress, onPlayVisibilityChange }: WorldSceneProps) {
     key.position.set(10, 14, 14)
     scene.add(key)
     const accentLight = new THREE.PointLight(0xC76B29, 0, 60)
-    accentLight.position.set(0, 2, -70)
+    accentLight.position.copy(MACHINE_POSITION)
+    accentLight.position.y += 3
     scene.add(accentLight)
+    const machineAtmosphere = new THREE.PointLight(0x6bc4d0, 0, 46)
+    machineAtmosphere.position.set(MACHINE_POSITION.x, MACHINE_POSITION.y + 5, MACHINE_POSITION.z + 8)
+    scene.add(machineAtmosphere)
 
     const clock = new THREE.Clock()
     const lookAhead = LOOK_AHEAD_STEP
-    let scrollProgress = progress
+    const cameraLookTarget = new THREE.Vector3()
+    let scrollProgress = 0
+    let frame = 0
+    let animationFrame = 0
+    const surfaceColor = new THREE.Color('#78a9b4')
+    const engineeringColor = new THREE.Color('#0F4F6C')
+    const deepColor = new THREE.Color('#041E36')
+    const fogSurface = new THREE.Color('#b9c8d3')
+    const fogEngineering = new THREE.Color('#0F4F6C')
+    const fogDeep = new THREE.Color('#041E36')
+    const fogSeabed = new THREE.Color('#12333a')
+    const nearParticleSurface = new THREE.Color('#d9e7f0')
+    const nearParticleEngineering = new THREE.Color('#9fb7c8')
+    const nearParticleDeep = new THREE.Color('#132b3f')
+    const farParticleSurface = new THREE.Color('#7e9bb2')
+    const farParticleEngineering = new THREE.Color('#496f87')
+    const farParticleDeep = new THREE.Color('#0a1b2a')
+    const sunBaseColor = new THREE.Color('#b9d8d8')
+    const sunEngineeringColor = new THREE.Color('#D9DDE2')
+    const sunDeepColor = new THREE.Color('#0F4F6C')
+    const hemiSurfaceColor = new THREE.Color('#ffe6c5')
+    const hemiEngineeringColor = new THREE.Color('#c8d8e6')
+    const keySurfaceColor = new THREE.Color('#ffd8a8')
+    const keyEngineeringColor = new THREE.Color('#b8d2e1')
+    const accentBaseColor = new THREE.Color('#C76B29')
+    const accentDeepColor = new THREE.Color('#D9DDE2')
+    const blendedSurface = new THREE.Color()
+    const blendedDeep = new THREE.Color()
+    const fogColor = new THREE.Color()
+    const sunColor = new THREE.Color()
+    const nearParticleColor = new THREE.Color()
+    const farParticleColor = new THREE.Color()
 
     function animate() {
+      frame += 1
       const time = clock.getElapsedTime()
       oceanUniforms.uTime.value = time
       oceanUniforms.uCameraPos.value.copy(camera.position)
 
-      const attributes = nearField.geometry.attributes.position.array as Float32Array
-      for (let i = 0; i < nearField.count; i += 1) {
-        attributes[i * 3 + 1] += nearField.spd[i] * 0.012
-        if (attributes[i * 3 + 1] > 36) attributes[i * 3 + 1] = -36
-      }
-      nearField.geometry.attributes.position.needsUpdate = true
+      updateParticleField(nearField, time, frame, 0.006, 0.16)
+      updateParticleField(farField, time, frame, 0.003, 0.09)
+      updateParticleField(bubbles, time, frame, 0.012, 0.3)
+      updateParticleField(largerBubbles, time, frame, 0.008, 0.22)
+      updateParticleField(seabedDust, time, frame, 0.001, 0.12)
 
-      const attributes2 = farField.geometry.attributes.position.array as Float32Array
-      for (let i = 0; i < farField.count; i += 1) {
-        attributes2[i * 3 + 1] += farField.spd[i] * 0.007
-        if (attributes2[i * 3 + 1] > 36) attributes2[i * 3 + 1] = -36
-      }
-      farField.geometry.attributes.position.needsUpdate = true
+      ;(seabed.material as THREE.ShaderMaterial).uniforms.uTime.value = time
 
-      const depthProgress = THREE.MathUtils.clamp(scrollProgress * 1.15, 0, 1)
+      scrollProgress = progressRef.current
+      const cameraProgress = getJourneyCameraProgress(scrollProgress)
+      const depthProgress = THREE.MathUtils.clamp(cameraProgress, 0, 1)
+      const discoveryProgress = THREE.MathUtils.smoothstep(scrollProgress, 0.86, 0.96)
+      const approachProgress = THREE.MathUtils.smoothstep(scrollProgress, 0.94, 1)
       const surfaceZone = THREE.MathUtils.smoothstep(depthProgress, 0.0, 0.14)
       const engineeringZone = THREE.MathUtils.smoothstep(depthProgress, 0.10, 0.42)
       const deepZone = THREE.MathUtils.smoothstep(depthProgress, 0.38, 1.0)
 
-      const surfaceColor = new THREE.Color('#9fb8c9')
-      const engineeringColor = new THREE.Color('#0F4F6C')
-      const deepColor = new THREE.Color('#041E36')
-      const fogSurface = new THREE.Color('#b9c8d3')
-      const fogEngineering = new THREE.Color('#0F4F6C')
-      const fogDeep = new THREE.Color('#041E36')
-      const nearParticleSurface = new THREE.Color('#d9e7f0')
-      const nearParticleEngineering = new THREE.Color('#9fb7c8')
-      const nearParticleDeep = new THREE.Color('#132b3f')
-      const farParticleSurface = new THREE.Color('#7e9bb2')
-      const farParticleEngineering = new THREE.Color('#496f87')
-      const farParticleDeep = new THREE.Color('#0a1b2a')
-
-      const blendedSurface = surfaceColor.clone().lerp(engineeringColor, engineeringZone * 0.42)
-      const blendedDeep = deepColor.clone().lerp(engineeringColor, 0.18)
-      const fogColor = fogSurface.clone().lerp(fogEngineering, engineeringZone * 0.72).lerp(fogDeep, deepZone * 0.8)
+      blendedSurface.copy(surfaceColor).lerp(engineeringColor, engineeringZone * 0.42)
+      blendedDeep.copy(deepColor).lerp(engineeringColor, 0.18).lerp(fogSeabed, deepZone * 0.24)
+      fogColor.copy(fogSurface).lerp(fogEngineering, engineeringZone * 0.72).lerp(fogDeep, deepZone * 0.8).lerp(fogSeabed, deepZone * 0.34)
 
       oceanUniforms.uShallowColor.value.copy(blendedSurface)
       oceanUniforms.uDeepColor.value.copy(blendedDeep)
-      oceanUniforms.uSunColor.value.copy(new THREE.Color('#f6c48f').lerp(new THREE.Color('#D9DDE2'), engineeringZone * 0.52).lerp(new THREE.Color('#0F4F6C'), deepZone * 0.38))
+      sunColor.copy(sunBaseColor).lerp(sunEngineeringColor, engineeringZone * 0.52).lerp(sunDeepColor, deepZone * 0.38)
+      oceanUniforms.uSunColor.value.copy(sunColor)
 
       oceanUniforms.uOpacity.value = 0.92 - surfaceZone * 0.13 + deepZone * 0.03
       sunSprite.material.opacity = Math.max(0, 0.82 - depthProgress * 0.62)
 
-      const nearParticleColor = nearParticleSurface.clone().lerp(nearParticleEngineering, engineeringZone * 0.85).lerp(nearParticleDeep, deepZone * 0.92)
-      const farParticleColor = farParticleSurface.clone().lerp(farParticleEngineering, engineeringZone * 0.65).lerp(farParticleDeep, deepZone * 0.9)
-      nearField.points.material.color.copy(nearParticleColor)
-      farField.points.material.color.copy(farParticleColor)
-      nearField.points.material.opacity = nearFieldBaseOpacity * (0.18 + engineeringZone * 0.42 + deepZone * 0.18)
-      farField.points.material.opacity = farFieldBaseOpacity * (0.12 + deepZone * 0.42)
-      nearField.points.material.size = 0.26 + engineeringZone * 0.06 - deepZone * 0.04
-      farField.points.material.size = 0.55 + deepZone * 0.12
+      nearParticleColor.copy(nearParticleSurface).lerp(nearParticleEngineering, engineeringZone * 0.85).lerp(nearParticleDeep, deepZone * 0.92)
+      farParticleColor.copy(farParticleSurface).lerp(farParticleEngineering, engineeringZone * 0.65).lerp(farParticleDeep, deepZone * 0.9)
+      nearField.material.color.copy(nearParticleColor)
+      farField.material.color.copy(farParticleColor)
+      nearField.material.opacity = nearFieldBaseOpacity * (0.18 + engineeringZone * 0.42 + deepZone * 0.18)
+      farField.material.opacity = farFieldBaseOpacity * (0.12 + deepZone * 0.42)
+      bubbles.material.opacity = bubbleBaseOpacity * (0.2 + engineeringZone * 0.35 + deepZone * 0.55)
+      largerBubbles.material.opacity = largerBubbleBaseOpacity * (0.16 + deepZone * 0.38)
+      seabedDust.material.opacity = seabedDustBaseOpacity * deepZone * (0.45 + approachProgress * 0.55)
+      nearField.material.size = 0.26 + engineeringZone * 0.06 - deepZone * 0.04
+      farField.material.size = 0.55 + deepZone * 0.12
 
       shaftGroup.children.forEach((mesh, index) => {
         const shaftDepth = THREE.MathUtils.clamp(index / Math.max(shaftGroup.children.length - 1, 1), 0, 1)
@@ -392,41 +519,56 @@ export function Scene({ progress, onPlayVisibilityChange }: WorldSceneProps) {
         debrisMaterial.opacity = debrisFade.v * 0.5
       })
 
-      const thumbnailDistance = camera.position.distanceTo(discoveryPlane.position)
-      const thumbnailReveal = 1 - THREE.MathUtils.clamp((thumbnailDistance - 18) / 86, 0, 1)
-      discoveryPlane.material.opacity = Math.max(0, thumbnailReveal * 0.95)
-      onPlayVisibilityChange?.(thumbnailReveal > 0.2)
-
-      const curvePoint = cameraPath.getPointAt(scrollProgress)
-      const curveLookTarget = cameraPath.getPointAt(Math.min(scrollProgress + lookAhead, 1))
-      camera.position.copy(curvePoint)
-      camera.lookAt(curveLookTarget)
+      updateCamera(camera, cameraPath, scrollProgress, lookAhead, cameraLookTarget)
 
       fog.color.copy(fogColor)
+      backgroundColor.copy(blendedDeep).lerp(fogColor, 0.12)
       fog.density = 0.012 + engineeringZone * 0.028 + deepZone * 0.06
-      hemi.color.copy(new THREE.Color('#ffe6c5').lerp(new THREE.Color('#c8d8e6'), engineeringZone * 0.6).lerp(new THREE.Color('#0F4F6C'), deepZone * 0.72))
+      hemi.color.copy(hemiSurfaceColor).lerp(hemiEngineeringColor, engineeringZone * 0.6).lerp(sunDeepColor, deepZone * 0.72)
       hemi.intensity = 1.05 - engineeringZone * 0.22 - deepZone * 0.58
-      key.color.copy(new THREE.Color('#ffd8a8').lerp(new THREE.Color('#b8d2e1'), engineeringZone * 0.65).lerp(new THREE.Color('#0F4F6C'), deepZone * 0.5))
+      key.color.copy(keySurfaceColor).lerp(keyEngineeringColor, engineeringZone * 0.65).lerp(sunDeepColor, deepZone * 0.5)
       key.intensity = 1.3 - engineeringZone * 0.34 - deepZone * 0.72
-      accentLight.color.copy(new THREE.Color('#C76B29').lerp(new THREE.Color('#D9DDE2'), deepZone * 0.4))
+      accentLight.color.copy(accentBaseColor).lerp(accentDeepColor, deepZone * 0.4)
       accentLight.intensity = 0.18 + deepZone * 0.7
+      machineAtmosphere.intensity = deepZone * (0.08 + approachProgress * 0.22)
       shaftFade.v = 0.14 + engineeringZone * 0.25 + deepZone * 0.42
       debrisFade.v = deepZone * 0.85
 
-      paintDiscovery(time)
+      machineUniforms.uReveal.value = discoveryProgress * (0.62 + approachProgress * 0.38)
       renderer.render(scene, camera)
-      scrollProgress = progress
-      requestAnimationFrame(animate)
+      animationFrame = requestAnimationFrame(animate)
     }
 
     animate()
 
     return () => {
       window.removeEventListener('resize', resize)
+      window.removeEventListener('pointermove', handlePointerMove)
+      cancelAnimationFrame(animationFrame)
+      originalTexture.dispose()
+      xrayTexture.dispose()
+      machine.geometry.dispose()
+      machine.material.dispose()
+      leaderGeometry.dispose()
+      leaderMaterial.dispose()
+      ;[nearField, farField, bubbles, largerBubbles, seabedDust].forEach((field) => {
+        disposeParticleField(field)
+      })
+      shaftGroup.children.forEach((child) => {
+        const shaftMesh = child as THREE.Mesh
+        shaftMesh.geometry.dispose()
+        disposeMaterial(shaftMesh.material)
+      })
+      shaftTex.dispose()
+      seabed.geometry.dispose()
+      seabed.material.dispose()
+      rockGeometry.dispose()
+      rockMaterial.dispose()
+      rocks.dispose()
       renderer.dispose()
       scene.clear()
     }
-  }, [progress, onPlayVisibilityChange])
+  }, [onHotspotChange])
 
   return <canvas id="world-canvas" ref={canvasRef} />
 }
